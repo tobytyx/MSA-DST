@@ -1,0 +1,6 @@
+__pycache__
+.vscode
+output/
+data/
+dependences/
+*.pyc
