@@ -24,7 +24,7 @@ def get_args():
     # Required part
     parser.add_argument("--dataset", default="multiwoz", type=str, choices=["multiwoz", "crosswoz"])
     parser.add_argument("--name", required=True, type=str)
-    parser.add_argument("--encoder", default="transformer", type=str, choices=["bert", "transformer"])
+    parser.add_argument("--encoder", default="bert", type=str, choices=["bert", "transformer"])
     parser.add_argument("--local_rank", default=-1, type=int)
     parser.add_argument("--num_workers", default=4, type=int)
     parser.add_argument("--no_cuda", action='store_true')
@@ -32,7 +32,7 @@ def get_args():
     # training part
     parser.add_argument("--num_epochs", default=50, type=int)
     parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--learning_rate", default=1e-3, type=float)
+    parser.add_argument("--learning_rate", default=2e-4, type=float)
     parser.add_argument("--max_grad_norm", default=5.0, type=float)
     parser.add_argument("--log_step", default=500, type=int)  # bsz: 16 -> step: 3542/epoch
     parser.add_argument("--eval_step", default=2000, type=int)
@@ -107,9 +107,9 @@ class Trainer(object):
                 {"params": [p for n, p in param_optimizer if "bert" in n], "lr": 5e-5},
                 {"params": [p for n, p in param_optimizer if "bert" not in n], "lr": args["learning_rate"]}
             ]
-            self.optimizer = AdamW(optimizer_grouped_parameters, weight_decay=0.01)
+            self.optimizer = AdamW(optimizer_grouped_parameters)
         else:
-            self.optimizer = AdamW(model.parameters(), lr=args["learning_rate"], weight_decay=0.01)
+            self.optimizer = AdamW(model.parameters(), lr=args["learning_rate"])
         # total_steps = args["num_epochs"] * len(self.train_dataloader)
         # warmup_steps = int(total_steps * args["warmup_proportion"])
         # self.scheduler = get_linear_schedule_with_warmup(
@@ -323,13 +323,14 @@ class Trainer(object):
                 input_attention_mask = batch["input_attention_mask"].to(device=self.device)
                 input_token_type_ids = batch["input_token_type_ids"].to(device=self.device)
                 target = batch["target"].to(device=self.device)  # [b, slot_len, len]
-                labels = batch["labels"]
+                labels = batch["labels"].view(-1)
                 _, cls_out = self.model(
                     input_ids, input_attention_mask, input_token_type_ids,
                     target, None, False)
-                preds = torch.argmax(cls_out, dim=-1).detach().cpu()
+                preds = torch.argmax(cls_out, dim=-1).detach().cpu().view(-1)  # [b*slot_num]
                 matrix[preds, labels] += 1
         matrix /= torch.sum(matrix)
+        self.logger.info(self.slot_map.keys())
         self.logger.info(matrix)
         acc = torch.sum(matrix[range(gate_num), range(gate_num)]).item()
         self.logger.info("[Step {}] Gate Acc: {:.2f}%".format(self.total_step, acc*100))
@@ -398,7 +399,7 @@ def main():
     train_dataset = DialogDataset(
         train_data, tokenizer, slot_map, gate_label, args["max_seq_len"], args["max_resp_len"], True,
         sp_ids["user_type_id"], sp_ids["sys_type_id"], sp_ids["belief_type_id"],
-        sp_ids["pad_id"], sp_ids["eos_id"], sp_ids["cls_id"]
+        sp_ids["pad_id"], sp_ids["eos_id"], sp_ids["cls_id"], sp_ids["belief_sep_id"]
     )
     if not os.path.exists(train_pkl) and args["local_rank"] in [-1, 0]:
         with open(train_pkl, mode="wb") as f:
@@ -415,7 +416,7 @@ def main():
     dev_dataset = DialogDataset(
         dev_data, tokenizer, slot_map, gate_label, args["max_seq_len"], args["max_resp_len"], False,
         sp_ids["user_type_id"], sp_ids["sys_type_id"], sp_ids["belief_type_id"],
-        sp_ids["pad_id"], sp_ids["eos_id"], sp_ids["cls_id"]
+        sp_ids["pad_id"], sp_ids["eos_id"], sp_ids["cls_id"], sp_ids["belief_sep_id"]
     )
     if not os.path.exists(dev_pkl) and args["local_rank"] in [-1, 0]:
         with open(dev_pkl, mode="wb") as f:
