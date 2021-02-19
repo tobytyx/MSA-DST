@@ -7,29 +7,31 @@ CLS_TOKEN = "[CLS]"
 SEP_TOKEN = "[SEP]"
 PAD_TOEKN = "[PAD]"
 UNK_TOKEN = "[UNK]"
+BELIEF_SEP_TOKEN = '[B_SEP]'
 NONE_TOKEN = "none"
 DONTCARE_TOKEN = "dontcare"
 PTR_TOKEN = "ptr"
 
 CLS_SCALES = {
     NONE_TOKEN: 0.5,
-    DONTCARE_TOKEN: 2.5,
-    PTR_TOKEN: 1.5
+    DONTCARE_TOKEN: 1.5,
+    PTR_TOKEN: 1.0
 }
 
 
 def get_special_ids(tokenizer):
-    cls_id, eos_id, pad_id, none_id, dontcare_id = tokenizer.convert_tokens_to_ids(
-        [CLS_TOKEN, SEP_TOKEN, PAD_TOEKN, NONE_TOKEN, DONTCARE_TOKEN])
+    cls_id, eos_id, pad_id, none_id, dontcare_id, belief_sep_id = tokenizer.convert_tokens_to_ids(
+        [CLS_TOKEN, SEP_TOKEN, PAD_TOEKN, NONE_TOKEN, DONTCARE_TOKEN, BELIEF_SEP_TOKEN])
     return {
         "cls_id": cls_id,
         "eos_id": eos_id,
         "pad_id": pad_id,
         "none_id": none_id,
         "dontcare_id": dontcare_id,
+        "belief_sep_id": belief_sep_id,
         "user_type_id": 0,
         "sys_type_id": 1,
-        "belief_type_id": 2
+        "belief_type_id": 0
     }
 
 

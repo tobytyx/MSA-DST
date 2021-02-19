@@ -15,16 +15,15 @@ def get_data(file_name):
     with open(file_name) as f:
         dials = json.load(f)
         for dial_dict in dials:
-            # Filtering and counting domains
-            for domain in dial_dict["domains"]:
-                if domain not in EXPERIMENT_DOMAINS:
-                    continue
-                if domain not in domain_counter.keys():
-                    domain_counter[domain] = 0
-                domain_counter[domain] += 1
             dial = []
             # Reading data
             for turn in dial_dict["dialogue"]:
+                if turn["domain"] not in EXPERIMENT_DOMAINS:
+                    continue
+                # Filtering and counting domains
+                if turn["domain"] not in domain_counter:
+                    domain_counter[turn["domain"]] = 0
+                domain_counter[turn["domain"]] += 1
                 dial.append({
                     "domain": turn["domain"],  # 'hotel'
                     "turn_id": turn["turn_idx"],  # 0
@@ -32,11 +31,12 @@ def get_data(file_name):
                     "transcript": turn["transcript"].strip(),  # '; i need to book a hotel in the east that has 4 stars .'
                     "system_transcript": turn["system_transcript"].strip()
                 })
-            data.append({
-                "id": dial_dict["dialogue_idx"],  # 'PMUL1635.json'
-                "domains": dial_dict["domains"],  # ['train', 'hotel']
-                "dialogue": dial
-            })
+            if len(dial) > 0:
+                data.append({
+                    "id": dial_dict["dialogue_idx"],  # 'PMUL1635.json'
+                    "domains": dial_dict["domains"],  # ['train', 'hotel']
+                    "dialogue": dial
+                })
     return data, domain_counter
 
 
@@ -54,8 +54,9 @@ def truncate_seq_pair(tokens_a: List, tokens_b: List=None, max_length=50):
 
 
 class DialogDataset(Dataset):
-    def __init__(self, data, tokenizer, slot_pair, gate_dict, max_length, bs_max_length, is_train,
-                 user_type_id, sys_type_id, belief_type_id, pad_token_id, sep_token_id, cls_token_id):
+    def __init__(self, data, tokenizer, slot_pair, gate_dict, max_length,
+                 bs_max_length, is_train, user_type_id, sys_type_id,
+                 belief_type_id, pad_token_id, sep_token_id, cls_token_id, belief_sep_id):
         self.data = []
         self.tokenizer = tokenizer
         self.pad_id = pad_token_id
@@ -65,6 +66,7 @@ class DialogDataset(Dataset):
         self.user_type_id = user_type_id
         self.sys_type_id = sys_type_id
         self.belief_type_id = belief_type_id
+        self.belief_sep_id = belief_sep_id
         self.is_train = is_train
         self.gate_dict = gate_dict
         if isinstance(data, str):
@@ -72,8 +74,6 @@ class DialogDataset(Dataset):
                 self.data = pickle.load(f)
         else:
             for each in data:
-                history_ids = []
-                history_token_type_ids = []
                 last_belief_state = {}
                 for turn in each["dialogue"]:
                     belief_state = turn["belief_state"]
@@ -87,15 +87,15 @@ class DialogDataset(Dataset):
                     else:
                         text_ids = user_ids
                         text_type_ids = [user_type_id] * len(user_ids)
-                    history_ids.extend(text_ids + [sep_token_id])
-                    history_token_type_ids.extend(text_type_ids + [user_type_id])
                     belief_ids = []
                     for slot, value in last_belief_state.items():
+                        if slot not in slot_pair:
+                            continue
                         tokens = [slot_pair[slot]["domain"], slot_pair[slot]["slot"], "is"] + tokenizer.tokenize(value)
-                        belief_ids.extend(tokenizer.convert_tokens_to_ids(tokens) + [sep_token_id])
-                    
-                    input_ids = history_ids + belief_ids
-                    input_type_ids = history_token_type_ids + [belief_type_id] * len(belief_ids)
+                        belief_ids.extend(tokenizer.convert_tokens_to_ids(tokens) + [belief_sep_id])
+
+                    input_ids = text_ids + [sep_token_id] + belief_ids
+                    input_type_ids = text_type_ids + [user_type_id] + [belief_type_id] * len(belief_ids)
 
                     input_ids = [cls_token_id] + input_ids[-(max_length-1):]
                     input_type_ids = [user_type_id] + input_type_ids[-(max_length-1):]
