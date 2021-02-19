@@ -32,7 +32,7 @@ def get_args():
     # training part
     parser.add_argument("--num_epochs", default=50, type=int)
     parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--learning_rate", default=2e-4, type=float)
+    parser.add_argument("--learning_rate", default=5e-5, type=float)
     parser.add_argument("--max_grad_norm", default=5.0, type=float)
     parser.add_argument("--log_step", default=500, type=int)  # bsz: 16 -> step: 3542/epoch
     parser.add_argument("--eval_step", default=2000, type=int)
@@ -100,7 +100,7 @@ class Trainer(object):
                 sampler=dev_sampler, collate_fn=dev_dataset.collate_fn)
 
         self.gen_criterion = nn.CrossEntropyLoss(ignore_index=sepcial_token_ids["pad_id"], reduction="none").to(device)
-        self.cls_criterion = nn.CrossEntropyLoss(reduction="none").to(device)
+        self.cls_criterion = nn.CrossEntropyLoss(weight=torch.tensor(CLS_SCALES), reduction="mean").to(device)
         if self.args["encoder"] == "bert":
             param_optimizer = list(model.named_parameters())
             optimizer_grouped_parameters = [
@@ -135,10 +135,6 @@ class Trainer(object):
             target_attention_mask = batch["target_attention_mask"].to(device=self.device)
             target_seq_mask = batch["target_seq_mask"].to(device=self.device)
             labels = batch["labels"].to(device=self.device)  # [b, slot_num]
-            labels_scale = torch.zeros(*labels.size(), dtype=torch.float, device=self.device)
-            for name, scale in CLS_SCALES.items():
-                labels_scale[labels==self.gate_label[name]] = scale
-
             all_logits, cls_out = self.model(
                 input_ids, input_attention_mask, input_token_type_ids,
                 target[:, :, :-1], target_attention_mask[:, :, :-1], self.do_gen)
@@ -156,7 +152,7 @@ class Trainer(object):
                 cls_out.view(-1, cls_out.size(-1)),
                 labels.view(-1)
             )  # [b*slot_num]
-            cls_loss = torch.mean(cls_loss.view(*labels_scale.size()) * labels_scale)
+            # cls_loss = torch.mean(cls_loss.view(*labels_scale.size()) * labels_scale)
             loss = self.args["cls_loss"] * cls_loss + self.args["gen_loss"] * gen_loss
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args["max_grad_norm"])
@@ -186,11 +182,13 @@ class Trainer(object):
                         self.save_records(eval_records)
                         self.best_score = slot_acc
                 else:
-                    gate_acc = self._eval_classify()
+                    gate_acc, gate_records = self._eval_classify()
                     if gate_acc > self.best_score and self.local_rank in [-1, 0]:
                         self.logger.info(
                             "Gate Acc {:.2f}% -> {:.2f}%, Update Best model".format(gate_acc*100, self.best_score*100))
                         self.save_model()
+                        with open(os.path.join(self.args["output_dir"], "gate_records.json"), mode="w") as f:
+                            json.dump(gate_records, f, ensure_ascii=False)
                         self.best_score = gate_acc
                 self.model.train()
             self.total_step += 1
@@ -205,11 +203,13 @@ class Trainer(object):
                 self.save_records(eval_records)
                 self.best_score = slot_acc
         else:
-            gate_acc = self._eval_classify()
+            gate_acc, gate_records = self._eval_classify()
             if gate_acc > self.best_score and self.local_rank in [-1, 0]:
                 self.logger.info(
                     "Gate Acc {:.2f}% -> {:.2f}%, Update Best model".format(gate_acc*100, self.best_score*100))
                 self.save_model()
+                with open(os.path.join(self.args["output_dir"], "gate_records.json"), mode="w") as f:
+                    json.dump(gate_records, f, ensure_ascii=False)
                 self.best_score = gate_acc
         self.model.train()
 
@@ -315,26 +315,37 @@ class Trainer(object):
         return joint_acc, slot_acc, gate_acc, eval_records
 
     def _eval_classify(self):
-        gate_num = len(self.gate_label)
-        matrix = torch.zeros(gate_num, gate_num, dtype=torch.float)
+        joint_gate_correct, gate_correct, total_num = 0, 0, 0
+        slot_num = len(self.slot_map)
+        records = []
         with torch.no_grad():
             for batch in self.dev_dataloader:
                 input_ids = batch["input_ids"].to(device=self.device)
                 input_attention_mask = batch["input_attention_mask"].to(device=self.device)
                 input_token_type_ids = batch["input_token_type_ids"].to(device=self.device)
                 target = batch["target"].to(device=self.device)  # [b, slot_len, len]
-                labels = batch["labels"].view(-1)
+                labels = batch["labels"]
                 _, cls_out = self.model(
                     input_ids, input_attention_mask, input_token_type_ids,
                     target, None, False)
-                preds = torch.argmax(cls_out, dim=-1).detach().cpu().view(-1)  # [b*slot_num]
-                matrix[preds, labels] += 1
-        matrix /= torch.sum(matrix)
-        self.logger.info(self.slot_map.keys())
-        self.logger.info(matrix)
-        acc = torch.sum(matrix[range(gate_num), range(gate_num)]).item()
-        self.logger.info("[Step {}] Gate Acc: {:.2f}%".format(self.total_step, acc*100))
-        return acc
+                preds = torch.argmax(cls_out, dim=-1).detach().cpu()  # [b, slot_num]
+                for i in range(len(batch["dialogue_ids"])):
+                    records.append({
+                        "dialogue_id": batch["dialogue_ids"][i],
+                        "turn_id": batch["turn_ids"][i],
+                        "preds": preds[i].tolist(),
+                        "labels": labels[i].tolist()
+                    })
+                    eq_num = torch.eq(preds[i], labels[i]).sum().item()
+                    gate_correct += eq_num
+                    if eq_num == slot_num:
+                        joint_gate_correct += 1
+                    total_num += 1
+        gate_acc = gate_correct / (total_num * slot_num)
+        joint_gate_acc = joint_gate_correct / total_num
+        self.logger.info("[Step {}] Gate Acc: {:.2f}% Joint Gate Acc: {:.2f}%".format(
+            self.total_step, gate_acc*100, joint_gate_acc*100))
+        return gate_acc, records
 
     def save_model(self):
         model_path = os.path.join(self.args["output_dir"], "model.bin")
