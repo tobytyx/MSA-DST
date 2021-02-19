@@ -79,6 +79,8 @@ class DialogueModel(nn.Module):
                 cur_len = cur_len + 1
                 if all(is_done):
                     break
+                slot_target = torch.cat([slot_target, next_tokens.unsqueeze(-1)], dim=-1)  # [b, n+1]
+                slot_target_mask = torch.ones(*slot_target.size(), dtype=torch.long, device=self.device)
             all_result[is_none, i, 0] = none_id
             all_result[is_dontcare, i, 0] = dontcare_id
         return all_result, cls_out
