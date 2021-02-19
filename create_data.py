@@ -336,7 +336,7 @@ def main():
             ds = d + "-" + s
         else:
             ds = d + "-" + m + " " + s
-        slot_map[ds] = {"domain": d, "slot": s}
+        slot_map[ds] = {"domain": "[" + d + "]", "slot": "[" + s + "]"}
     with open(os.path.join(output_dir, "slot_map.json"), mode="w") as f:
         json.dump(slot_map, f, indent=2, ensure_ascii=False)
 
