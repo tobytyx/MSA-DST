@@ -38,7 +38,7 @@ def get_args():
     parser.add_argument("--eval_step", default=2000, type=int)
     parser.add_argument("--warmup_proportion", type=float, default=0.01)
     parser.add_argument("--cls_loss", default=1., type=float)
-    parser.add_argument("--gen_loss", default=0.3, type=float)
+    parser.add_argument("--gen_loss", default=0.5, type=float)
     # model part
     parser.add_argument("--max_seq_len", default=128, type=int)
     parser.add_argument("--hidden_size", default=256, type=int)
