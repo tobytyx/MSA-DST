@@ -40,7 +40,7 @@ class DialogueModel(nn.Module):
             for i in range(target_slot_len):
                 slot_target = target[:, i, :]
                 slot_target_mask = target_attention_mask[:, i, :]
-                dec_out = self.decoder(slot_target, slot_target_mask, enc_out[:, 1:, :], input_attention_mask[:, 1:, :])
+                dec_out = self.decoder(slot_target, slot_target_mask, enc_out[:, 1:, :], input_attention_mask[:, 1:])
                 logits = self.lm_head(dec_out)
                 all_logits.append(logits)
             all_logits = torch.stack(all_logits, dim=0).transpose(1, 0)  # [b, t_slot_len, len]
