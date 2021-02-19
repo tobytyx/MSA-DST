@@ -11,12 +11,7 @@ BELIEF_SEP_TOKEN = '[B_SEP]'
 NONE_TOKEN = "none"
 DONTCARE_TOKEN = "dontcare"
 PTR_TOKEN = "ptr"
-
-CLS_SCALES = {
-    NONE_TOKEN: 0.5,
-    DONTCARE_TOKEN: 1.5,
-    PTR_TOKEN: 1.0
-}
+CLS_SCALES = [1.0, 1.0, 1.0]
 
 
 def get_special_ids(tokenizer):
