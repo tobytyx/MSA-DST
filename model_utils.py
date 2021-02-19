@@ -204,7 +204,7 @@ class TransformerEncoder(nn.Module):
     def __init__(self, word_emb, n_layer, n_head, d_model, d_inner, dropout, pre_layer_norm, device):
         super(TransformerEncoder, self).__init__()
         self.position_emb = PositionalEmbedding(demb=d_model)
-        self.token_type_emb = nn.Embedding(3, d_model)
+        self.token_type_emb = nn.Embedding(2, d_model)
         self.word_emb = word_emb
         self.layers = nn.ModuleList([
             EncoderLayer(d_model, d_inner, n_head, dropout, pre_layer_norm) for _ in range(n_layer)])

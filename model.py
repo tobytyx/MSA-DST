@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 from transformers import BertModel
+# from transformers.models.bert.modeling_bert import BertModel
 from transformers.generation_utils import top_k_top_p_filtering
 from model_utils import TransformerDecoder, TransformerEncoder
 
@@ -15,8 +16,10 @@ class DialogueModel(nn.Module):
             self.encoder = TransformerEncoder(word_embedings, n_layer, n_head, hidden_size, d_inner, dropout, pre_layer_norm, device)
         else:
             self.encoder = BertModel.from_pretrained(encoder_name)
-            word_embedings = self.encoder.get_input_embeddings()
             hidden_size = self.encoder.config.hidden_size
+            vocab_size = self.encoder.config.vocab_size
+            word_embedings = nn.Embedding(vocab_size, hidden_size, padding_idx=pad_id)
+            # word_embedings = self.encoder.get_input_embeddings()
             d_inner = hidden_size * 4
         self.d_model = hidden_size
         self.slot_num = slot_num
@@ -37,7 +40,7 @@ class DialogueModel(nn.Module):
             for i in range(target_slot_len):
                 slot_target = target[:, i, :]
                 slot_target_mask = target_attention_mask[:, i, :]
-                dec_out = self.decoder(slot_target, slot_target_mask, enc_out, input_attention_mask)
+                dec_out = self.decoder(slot_target, slot_target_mask, enc_out[:, 1:, :], input_attention_mask[:, 1:, :])
                 logits = self.lm_head(dec_out)
                 all_logits.append(logits)
             all_logits = torch.stack(all_logits, dim=0).transpose(1, 0)  # [b, t_slot_len, len]
