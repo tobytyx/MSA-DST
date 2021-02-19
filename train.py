@@ -32,13 +32,13 @@ def get_args():
     # training part
     parser.add_argument("--num_epochs", default=50, type=int)
     parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--learning_rate", default=5e-5, type=float)
+    parser.add_argument("--learning_rate", default=2e-4, type=float)
     parser.add_argument("--max_grad_norm", default=5.0, type=float)
     parser.add_argument("--log_step", default=500, type=int)  # bsz: 16 -> step: 3542/epoch
     parser.add_argument("--eval_step", default=2000, type=int)
     parser.add_argument("--warmup_proportion", type=float, default=0.01)
     parser.add_argument("--cls_loss", default=1., type=float)
-    parser.add_argument("--gen_loss", default=0.2, type=float)
+    parser.add_argument("--gen_loss", default=0.3, type=float)
     # model part
     parser.add_argument("--max_seq_len", default=128, type=int)
     parser.add_argument("--hidden_size", default=256, type=int)
@@ -104,8 +104,10 @@ class Trainer(object):
         if self.args["encoder"] == "bert":
             param_optimizer = list(model.named_parameters())
             optimizer_grouped_parameters = [
-                {"params": [p for n, p in param_optimizer if "bert" in n], "lr": 5e-5},
-                {"params": [p for n, p in param_optimizer if "bert" not in n], "lr": args["learning_rate"]}
+                {"params": [p for n, p in param_optimizer if "encoder" in n], "lr": 5e-5},
+                {"params": [p for n, p in param_optimizer if "classify" in n], "lr": 5e-5},
+                {"params": [p for n, p in param_optimizer if ("encoder" not in n and "classify" not in n)],
+                 "lr": args["learning_rate"]}
             ]
             self.optimizer = AdamW(optimizer_grouped_parameters)
         else:
@@ -227,6 +229,7 @@ class Trainer(object):
     def _eval_test(self):
         back_remoeved_ids = [self.sepcial_token_ids["pad_id"], self.sepcial_token_ids["eos_id"]]
         slot_correct, label_correct, joint_correct = 0, 0, 0
+        extra_slot_correct, extra_slot_count = 0, 0
         tn, fn = 0, 0
         turn_count, slot_count = 0, 0
         eval_records = {}
@@ -279,20 +282,24 @@ class Trainer(object):
                         else:
                             if cls_out[i][j] == self.gate_label[NONE_TOKEN]:
                                 fn += 1
-                            joint_correct = False
+                            joint_done = False
 
                         if labels[i][j] == self.gate_label[PTR_TOKEN]:
                             if set(result) == set(target):
                                 slot_correct += 1
                             else:
-                                joint_correct = False
+                                joint_done = False
                             slot_count += 1
+                        else:
+                            if cls_out[i][j] == labels[i][j]:
+                                extra_slot_correct += 1
+                            extra_slot_count += 1
                     if joint_done:
                         joint_correct += 1
                     turn_count += 1
-            slot_acc = (slot_correct + tn) / (slot_count + tn)
-            pure_slot_acc = slot_correct / slot_count
             gate_acc = label_correct / (turn_count * slot_num)
+            slot_acc = (slot_correct + extra_slot_correct) / (slot_count + extra_slot_count)
+            pure_slot_acc = slot_correct / slot_count
             joint_acc = joint_correct / turn_count
             self.logger.info(
                 "[Step {}] Accuracy: Joint {:.2f}%, Slot: {:.2f}%, Pure Slot: {:.2f}%, Gate: {:.2f}%".format(
