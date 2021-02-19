@@ -6,8 +6,8 @@
 [restaurant]
 [taxi]
 [internet]
-[arriveBy]
-[leaveAt]
+[arriveby]
+[leaveat]
 [area]
 [department]
 [food]
@@ -22,5 +22,5 @@
 [parking]
 [departure]
 [name]
-none
 dontcare
+[B_SEP]
