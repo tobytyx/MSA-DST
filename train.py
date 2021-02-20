@@ -67,7 +67,7 @@ def setup_seed(seed):
 
 
 class Trainer(object):
-    def __init__(self, model, tokenizer, sepcial_token_ids, slot_map, gate_label, train_dataset, dev_dataset, args, logger, device):
+    def __init__(self, model, tokenizer, sepcial_token_ids, slot_map, gate_label, train_dataset, test_dataset, args, logger, device):
         # normal
         self.args = args
         self.device = device
@@ -84,9 +84,9 @@ class Trainer(object):
                 train_dataset, batch_size=args["batch_size"], shuffle=True,
                 num_workers=args["num_workers"], collate_fn=train_dataset.collate_fn)
 
-            self.dev_dataloader = DataLoader(
-                dev_dataset, batch_size=args["batch_size"], shuffle=False,
-                num_workers=args["num_workers"], collate_fn=dev_dataset.collate_fn)
+            self.test_dataloader = DataLoader(
+                test_dataset, batch_size=args["batch_size"], shuffle=False,
+                num_workers=args["num_workers"], collate_fn=test_dataset.collate_fn)
         else:
             self.model = model.to(device)
             self.model = DistributedDataParallel(model, device_ids=[args["local_rank"]]).to(device)
@@ -94,10 +94,10 @@ class Trainer(object):
             self.train_dataloader = DataLoader(
                 train_dataset, sampler=train_sampler, batch_size=args["batch_size"],
                 num_workers=args["num_workers"], collate_fn=train_dataset.collate_fn)
-            dev_sampler = DistributedSampler(dev_dataset)
-            self.dev_dataloader = DataLoader(
-                dev_dataset, batch_size=args["batch_size"], num_workers=args["num_workers"],
-                sampler=dev_sampler, collate_fn=dev_dataset.collate_fn)
+            test_sampler = DistributedSampler(test_dataset)
+            self.test_dataloader = DataLoader(
+                test_dataset, batch_size=args["batch_size"], num_workers=args["num_workers"],
+                sampler=test_sampler, collate_fn=test_dataset.collate_fn)
 
         self.gen_criterion = nn.CrossEntropyLoss(ignore_index=sepcial_token_ids["pad_id"], reduction="none").to(device)
         self.cls_criterion = nn.CrossEntropyLoss(weight=torch.tensor(CLS_SCALES), reduction="mean").to(device)
@@ -176,12 +176,12 @@ class Trainer(object):
             if self.total_step % self.args["eval_step"] == 0:
                 self.model.eval()
                 if self.do_gen:
-                    _, slot_acc, _, eval_records = self._eval_test()
+                    _, slot_acc, _, test_records = self._eval_test()
                     if slot_acc > self.best_score and self.local_rank in [-1, 0]:
                         self.logger.info(
                             "Slot Acc {:.2f}% -> {:.2f}%, Update Best model".format(slot_acc*100, self.best_score*100))
                         self.save_model()
-                        self.save_records(eval_records)
+                        self.save_records(test_records)
                         self.best_score = slot_acc
                 else:
                     gate_acc, gate_records = self._eval_classify()
@@ -197,12 +197,12 @@ class Trainer(object):
 
         self.model.eval()
         if self.do_gen:
-            _, slot_acc, _, eval_records = self._eval_test()
+            _, slot_acc, _, test_records = self._eval_test()
             if slot_acc > self.best_score and self.local_rank in [-1, 0]:
                 self.logger.info(
                     "Slot Acc {:.2f}% -> {:.2f}%, Update Best model".format(slot_acc*100, self.best_score*100))
                 self.save_model()
-                self.save_records(eval_records)
+                self.save_records(test_records)
                 self.best_score = slot_acc
         else:
             gate_acc, gate_records = self._eval_classify()
@@ -223,22 +223,20 @@ class Trainer(object):
             new_records[dial_name] = []
             for i in range(len(turns)):
                 new_records[dial_name].append(turns[i][1])
-        with open(os.path.join(self.args["output_dir"], "eval_records.json"), mode="w") as f:
+        with open(os.path.join(self.args["output_dir"], "test_records.json"), mode="w") as f:
             json.dump(new_records, f, indent=2, ensure_ascii=False)
 
     def _eval_test(self):
         back_remoeved_ids = [self.sepcial_token_ids["pad_id"], self.sepcial_token_ids["eos_id"]]
-        slot_correct, label_correct, joint_correct = 0, 0, 0
-        extra_slot_correct, extra_slot_count = 0, 0
-        tn, fn = 0, 0
+        slot_correct, label_correct, joint_correct, extra_slot_correct = 0, 0, 0, 0
         turn_count, slot_count = 0, 0
-        eval_records = {}
+        test_records = {}
         slot_num = len(self.slot_map)
         with torch.no_grad():
             all_domain_slot = [[v["domain"], v["slot"]] for v in self.slot_map.values()]
             all_domain_ids = [self.tokenizer.convert_tokens_to_ids(domain_slot) for domain_slot in all_domain_slot]
             slot_ids = torch.tensor(all_domain_ids, dtype=torch.long, device=self.device)
-            for batch in self.dev_dataloader:
+            for batch in self.test_dataloader:
                 input_ids = batch["input_ids"].to(device=self.device)
                 input_attention_mask = batch["input_attention_mask"].to(device=self.device)
                 input_token_type_ids = batch["input_token_type_ids"].to(device=self.device)
@@ -257,10 +255,10 @@ class Trainer(object):
                 targets = batch["target"].tolist()  # [b, slot_num, max_len]
                 for i in range(bsz):
                     dial_id, turn_id = batch["dialogue_ids"][i], batch["turn_ids"][i]
-                    if dial_id not in eval_records:
-                        eval_records[dial_id] = {}
-                    if turn_id not in eval_records[dial_id]:
-                        eval_records[dial_id][turn_id] = {}
+                    if dial_id not in test_records:
+                        test_records[dial_id] = {}
+                    if turn_id not in test_records[dial_id]:
+                        test_records[dial_id][turn_id] = {}
                     joint_done = True
                     for j in range(slot_num):
                         domain_slot = "-".join(all_domain_slot[j])
@@ -269,7 +267,7 @@ class Trainer(object):
                         slot, target = target[:2], target[2:]
                         target = clean_tokens(target, back_remoeved_ids=back_remoeved_ids)
                         assert slot == all_domain_ids[j], "{}, {}".format(slot, all_domain_ids[j])
-                        eval_records[dial_id][turn_id][domain_slot]= {
+                        test_records[dial_id][turn_id][domain_slot]= {
                             "pred": " ".join(self.tokenizer.convert_ids_to_tokens(result)),
                             "ref": " ".join(self.tokenizer.convert_ids_to_tokens(target)),
                             "pred_gate": cls_out[i][j],
@@ -277,56 +275,46 @@ class Trainer(object):
                         }
                         if cls_out[i][j] == labels[i][j]:
                             label_correct += 1
-                            if cls_out[i][j] == self.gate_label[NONE_TOKEN]:
-                                tn += 1
-                        else:
-                            if cls_out[i][j] == self.gate_label[NONE_TOKEN]:
-                                fn += 1
-                            joint_done = False
-
-                        if labels[i][j] == self.gate_label[PTR_TOKEN]:
-                            if set(result) == set(target):
-                                slot_correct += 1
+                            if cls_out[i][j] == self.gate_label[PTR_TOKEN]:
+                                if set(result) == set(target):
+                                    slot_correct += 1
+                                else:
+                                    joint_done = False
+                                slot_count += 1
                             else:
-                                joint_done = False
-                            slot_count += 1
-                        else:
-                            if cls_out[i][j] == labels[i][j]:
                                 extra_slot_correct += 1
-                            extra_slot_count += 1
+                        else:
+                            joint_done = False
                     if joint_done:
                         joint_correct += 1
                     turn_count += 1
             gate_acc = label_correct / (turn_count * slot_num)
-            slot_acc = (slot_correct + extra_slot_correct) / (slot_count + extra_slot_count)
+            slot_acc = (slot_correct + extra_slot_correct) / (turn_count * slot_num)
             pure_slot_acc = slot_correct / slot_count
             joint_acc = joint_correct / turn_count
             self.logger.info(
                 "[Step {}] Accuracy: Joint {:.2f}%, Slot: {:.2f}%, Pure Slot: {:.2f}%, Gate: {:.2f}%".format(
                     self.total_step, joint_acc*100, slot_acc*100, pure_slot_acc*100, gate_acc*100)
             )
-            self.logger.info(
-                "[Slot Gate]: Total: {}, Ture None: {}, False None: {}".format(turn_count * slot_num, tn, fn)
-            )
-            rand_dial = random.choice(list(eval_records.keys()))
-            rand_turn = random.choice(list(eval_records[rand_dial].keys()))
+            rand_dial = random.choice(list(test_records.keys()))
+            rand_turn = random.choice(list(test_records[rand_dial].keys()))
             log_str = "---- Dial: {}, Turn: {} ----\n".format(rand_dial, rand_turn)
             for _ in range(2):
-                rand_ds = random.choice(list(eval_records[rand_dial][rand_turn].keys()))
+                rand_ds = random.choice(list(test_records[rand_dial][rand_turn].keys()))
                 log_str += "Domain-Slot: {}\n".format(rand_ds)
                 log_str += "\n".join(
-                    ["{}: {}".format(k, v) for k, v in eval_records[rand_dial][rand_turn][rand_ds].items()]
+                    ["{}: {}".format(k, v) for k, v in test_records[rand_dial][rand_turn][rand_ds].items()]
                 )
                 log_str += "\n"
             self.logger.info(log_str)
-        return joint_acc, slot_acc, gate_acc, eval_records
+        return joint_acc, slot_acc, gate_acc, test_records
 
     def _eval_classify(self):
         joint_gate_correct, gate_correct, total_num = 0, 0, 0
         slot_num = len(self.slot_map)
         records = []
         with torch.no_grad():
-            for batch in self.dev_dataloader:
+            for batch in self.test_dataloader:
                 input_ids = batch["input_ids"].to(device=self.device)
                 input_attention_mask = batch["input_attention_mask"].to(device=self.device)
                 input_token_type_ids = batch["input_token_type_ids"].to(device=self.device)
@@ -423,25 +411,25 @@ def main():
         with open(train_pkl, mode="wb") as f:
             pickle.dump(train_dataset.data, f)
         logger.info("save training cache to {}".format(train_pkl))
-    # dev_dataset
-    dev_pkl = os.path.join(data_dir, "dev_dials_{}.pkl".format(len(tokenizer)))
-    if os.path.exists(dev_pkl):
-        dev_data = dev_pkl
-        logger.info("load dev cache from {}".format(dev_pkl))
+    # test_dataset
+    test_pkl = os.path.join(data_dir, "test_dials_{}.pkl".format(len(tokenizer)))
+    if os.path.exists(test_pkl):
+        test_data = test_pkl
+        logger.info("load test cache from {}".format(test_pkl))
     else:
-        dev_data, domain_counter = get_data(os.path.join(data_dir, "dev_dials.json"))
-        logger.info("Eval domain_counter: {}".format(domain_counter))
-    dev_dataset = DialogDataset(
-        dev_data, tokenizer, slot_map, gate_label, args["max_seq_len"], args["max_resp_len"], False,
+        test_data, domain_counter = get_data(os.path.join(data_dir, "test_dials.json"))
+        logger.info("Test domain_counter: {}".format(domain_counter))
+    test_dataset = DialogDataset(
+        test_data, tokenizer, slot_map, gate_label, args["max_seq_len"], args["max_resp_len"], False,
         sp_ids["user_type_id"], sp_ids["sys_type_id"], sp_ids["belief_type_id"],
         sp_ids["pad_id"], sp_ids["eos_id"], sp_ids["cls_id"], sp_ids["belief_sep_id"]
     )
-    if not os.path.exists(dev_pkl) and args["local_rank"] in [-1, 0]:
-        with open(dev_pkl, mode="wb") as f:
-            pickle.dump(dev_dataset.data, f)
-        logger.info("save dev cache to {}".format(dev_pkl))
+    if not os.path.exists(test_pkl) and args["local_rank"] in [-1, 0]:
+        with open(test_pkl, mode="wb") as f:
+            pickle.dump(test_dataset.data, f)
+        logger.info("save test cache to {}".format(test_pkl))
 
-    trainer = Trainer(model, tokenizer, sp_ids, slot_map, gate_label, train_dataset, dev_dataset, args, logger, device)
+    trainer = Trainer(model, tokenizer, sp_ids, slot_map, gate_label, train_dataset, test_dataset, args, logger, device)
     if args["local_rank"] in [-1, 0]:
         logger.info("Start training")
 
