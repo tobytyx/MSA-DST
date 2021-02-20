@@ -1,4 +1,4 @@
-## MSA-DST Multi-Domain Self-Attention Dialogue State Tracking
+## MSA-DST Mixed Self-Attention Dialogue State Tracking
 
 ## 简介
 采用了以生成式模型为base解决多领域下的DST问题，模型为Seq2Seq结构，encoder采用Bert，decoder为标准transformer decoder结构。
