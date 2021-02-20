@@ -10,7 +10,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-from transformers import BertTokenizer, get_linear_schedule_with_warmup
+from transformers import BertTokenizer
 from transformers.optimization import AdamW
 from tokenizer import Tokenizer
 from dataset import DialogDataset, get_data
@@ -31,6 +31,7 @@ def get_args():
     parser.add_argument('--seed', type=int, default=42)
     # training part
     parser.add_argument("--num_epochs", default=50, type=int)
+    parser.add_argument("--max_steps", default=0, type=int)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--learning_rate", default=2e-4, type=float)
     parser.add_argument("--max_grad_norm", default=5.0, type=float)
@@ -112,10 +113,6 @@ class Trainer(object):
             self.optimizer = AdamW(optimizer_grouped_parameters)
         else:
             self.optimizer = AdamW(model.parameters(), lr=args["learning_rate"])
-        # total_steps = args["num_epochs"] * len(self.train_dataloader)
-        # warmup_steps = int(total_steps * args["warmup_proportion"])
-        # self.scheduler = get_linear_schedule_with_warmup(
-        #     self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
         self.total_step = 1
         self.best_score = 0
         if self.local_rank in [-1, 0]:
@@ -126,7 +123,7 @@ class Trainer(object):
             self.do_gen = False
             logger.info("*** Only train classify task ***")
 
-    def train(self):
+    def train(self, max_step=0):
         self.model.train()
         count_gen_loss, count_cls_loss, count_len = 0, 0, 0
         for batch in self.train_dataloader:
@@ -194,6 +191,8 @@ class Trainer(object):
                         self.best_score = gate_acc
                 self.model.train()
             self.total_step += 1
+            if 0 < max_step < self.total_step:
+                break
 
         self.model.eval()
         if self.do_gen:
@@ -214,6 +213,7 @@ class Trainer(object):
                     json.dump(gate_records, f, ensure_ascii=False)
                 self.best_score = gate_acc
         self.model.train()
+        return self.total_step
 
     def save_records(self, records):
         new_records = {}
@@ -351,6 +351,7 @@ class Trainer(object):
 def main():
     args = get_args()
     setup_seed(args["seed"])
+    assert args["max_steps"] > 0 or args["num_epochs"] > 0
     output_dir = os.path.join("output", args["name"])
     data_dir = os.path.join("data", args["dataset"])
     args["output_dir"] = output_dir
@@ -435,7 +436,10 @@ def main():
 
     for epoch in range(1, args["num_epochs"]):
         logger.info("Epoch {} start, Cur step: {}".format(epoch, trainer.total_step))
-        trainer.train()
+        total_step = trainer.train(args["max_steps"])
+        if total_step > args["max_steps"]:
+            logger.info("Reach the max steps")
+            break
 
 
 if __name__ == "__main__":
