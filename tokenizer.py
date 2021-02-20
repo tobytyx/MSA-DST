@@ -74,7 +74,7 @@ def create_vocab(data_files: List[str], output_file, special_token_file="", min_
                                 vocab_count[token] = 1
                             else:
                                 vocab_count[token] += 1
-    vocab = specials + [k for k, v in vocab_count.items() if v >= min_times]
+    vocab = specials + [k for k, v in vocab_count.items() if (v >= min_times and k not in specials)]
     print("total vocab: {}".format(len(vocab)))
     with open(output_file, mode="w") as f:
         for k in vocab:
