@@ -240,13 +240,13 @@ class Trainer(object):
                 input_ids = batch["input_ids"].to(device=self.device)
                 input_attention_mask = batch["input_attention_mask"].to(device=self.device)
                 input_token_type_ids = batch["input_token_type_ids"].to(device=self.device)
-                target_labels = batch["labels"].to(device=self.device)
+                # target_labels = batch["labels"].to(device=self.device)
                 model = self.model.module if hasattr(self.model, 'module') else self.model
                 all_results, cls_out = model.generate(
                     input_ids, input_attention_mask, input_token_type_ids, slot_ids, self.args["topk"],
                     self.args["topp"], self.gate_label[NONE_TOKEN], self.gate_label[DONTCARE_TOKEN],
                     self.sepcial_token_ids["none_id"], self.sepcial_token_ids["dontcare_id"],
-                    self.sepcial_token_ids["eos_id"], self.args["max_resp_len"], target_labels=target_labels
+                    self.sepcial_token_ids["eos_id"], self.args["max_resp_len"], target_labels=None
                 )
                 bsz, slot_num = cls_out.size()
                 cls_out = cls_out.cpu().detach().tolist() # [b, slot_num]
